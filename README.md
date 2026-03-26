@@ -5,11 +5,14 @@
 
 Audit & optimize prompt caching for **Claude Code CLI**. Score /8, zero tokens consumed for the analysis.
 
+<img width="720" height="377" alt="image" src="https://github.com/user-attachments/assets/d431d18f-bad3-470a-926f-ea5800fda4db" />
+
 ## Why TEP?
 
 Anthropic's prompt caching offers a **90% cost reduction** on cache-read tokens. But without knowing **what** to cache and **where** you're burning tokens, that power is wasted.
 
 TEP is a **pure observer**: it reads Claude Code session data (`~/.claude/projects/`) and your target project's `CLAUDE.md` — without ever modifying the audited repo.
+
 
 
 ## Quick start
