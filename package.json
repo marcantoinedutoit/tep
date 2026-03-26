@@ -1,0 +1,20 @@
+{
+  "name": "tep",
+  "author": "Marc-Antoine DUTOIT",
+  "version": "1.0.0",
+  "description": "Token Economy Paradigm — Audit & optimize prompt caching for Claude Code CLI",
+  "scripts": {
+    "tep:audit": "bash scripts/audit-and-optimize.sh",
+    "usage": "npx ccusage@latest",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.4.2",
+    "@commitlint/config-conventional": "^20.4.2",
+    "ccusage": "latest",
+    "husky": "^9.1.7"
+  },
+  "dependencies": {
+    "@commitlint/types": "^20.5.0"
+  }
+}

@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Project Files ignored
+docs/TASKS.md
+docs/RESULT.md
+evals/history.jsonl
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Platform-specific config
+.npmrc
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Coverage
+coverage/
+
+# Temp
+.temp/
+.tmp/

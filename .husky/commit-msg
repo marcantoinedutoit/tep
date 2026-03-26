@@ -1,0 +1,2 @@
+# Validation du message de commit
+pnpm commitlint --edit $1
