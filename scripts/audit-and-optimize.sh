@@ -12,7 +12,7 @@ OUTPUT_DIR="$SCRIPT_DIR/docs"
 RESULT_FILE="$OUTPUT_DIR/RESULT.md"
 
 # --- Colors (terminal only) ---
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
 # --- Guards ---
 if [ -z "$PROJECT_DIR" ]; then
@@ -332,7 +332,7 @@ if $HAS_SKILLS; then
   SK_LIST=$(find "$CLAUDE_DIR/skills" -type f -name '*.md' 2>/dev/null || true)
   if [ -n "$SK_LIST" ]; then
     while IFS= read -r sf; do
-      add_to_inventory "$sf" "${sf#$PROJECT_DIR/}"
+      add_to_inventory "$sf" "${sf#"$PROJECT_DIR"/}"
     done <<< "$SK_LIST"
   fi
 fi
@@ -341,7 +341,7 @@ if [ -d "$CLAUDE_DIR/rules" ]; then
   RL_LIST=$(find "$CLAUDE_DIR/rules" -type f -name '*.md' 2>/dev/null || true)
   if [ -n "$RL_LIST" ]; then
     while IFS= read -r rf; do
-      add_to_inventory "$rf" "${rf#$PROJECT_DIR/}"
+      add_to_inventory "$rf" "${rf#"$PROJECT_DIR"/}"
     done <<< "$RL_LIST"
   fi
 fi
@@ -528,7 +528,7 @@ LATEST=""
 HAS_SESSION=false
 
 if [ -n "$SESSION_DIR" ]; then
-  LATEST=$(ls -t "$SESSION_DIR"/*.jsonl 2>/dev/null | head -1)
+  LATEST=$(find "$SESSION_DIR" -maxdepth 1 -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
   [ -n "$LATEST" ] && HAS_SESSION=true
 fi
 
@@ -614,7 +614,7 @@ else
     REASON="No session directory found for '$PROJECT_NAME'"
     echo -e "   ${YELLOW}⚠️  $REASON${NC}"
     echo "   Available directories:"
-    ls "$HOME/.claude/projects/" 2>/dev/null | sed 's/^/      /' || echo "      (none)"
+    find "$HOME/.claude/projects/" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; 2>/dev/null | sed 's/^/      /' || echo "      (none)"
   elif [ -z "$LATEST" ]; then
     REASON="No .jsonl in $SESSION_DIR"
     echo -e "   ${YELLOW}⚠️  $REASON${NC}"
