@@ -1,7 +1,7 @@
 # TEP — Token Economy Paradigm
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
-![ShellCheck](https://github.com/MadSaas/tep/actions/workflows/lint.yml/badge.svg)
+![ShellCheck](https://github.com/marcantoinedutoit/tep/actions/workflows/lint.yml/badge.svg)
 
 Audit & optimize prompt caching for **Claude Code CLI**. Score /8, zero tokens consumed for the analysis.
 
@@ -11,7 +11,6 @@ Anthropic's prompt caching offers a **90% cost reduction** on cache-read tokens.
 
 TEP is a **pure observer**: it reads Claude Code session data (`~/.claude/projects/`) and your target project's `CLAUDE.md` — without ever modifying the audited repo.
 
-![TEP screenshot](screen.jpg)
 
 ## Quick start
 
