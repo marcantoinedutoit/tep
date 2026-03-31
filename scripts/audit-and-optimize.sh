@@ -1,35 +1,45 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # audit-and-optimize.sh — Full audit + report for Claude Code
 # Usage: bash scripts/audit-and-optimize.sh [project-path]
 # Output: docs/RESULT.md (scannable by Claude Code)
 
+set -euo pipefail
+IFS=$'\n\t'
+
 # --- Config ---
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck disable=SC2046
-[ -f "$SCRIPT_DIR/.env" ] && export $(grep -v '^#' "$SCRIPT_DIR/.env" | xargs)
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Load .env safely (no `export $(...)` which breaks on spaces)
+if [ -f "$SCRIPT_DIR/.env" ]; then
+	set -a
+	# shellcheck disable=SC1091
+	source "$SCRIPT_DIR/.env"
+	set +a
+fi
+
 PROJECT_DIR="${1:-${PROJECT_AUDIT_DIR:-}}"
 OUTPUT_DIR="$SCRIPT_DIR/docs"
 RESULT_FILE="$OUTPUT_DIR/RESULT.md"
 
 # --- Colors (terminal only) ---
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
 # --- Guards ---
-if [ -z "$PROJECT_DIR" ]; then
-  echo -e "${RED}❌ Usage: $0 <project-path>${NC}"
-  echo "   Or set PROJECT_AUDIT_DIR in .env"
-  exit 1
+if [ -z "${PROJECT_DIR:-}" ]; then
+	echo -e "${RED}❌ Usage: $0 <project-path>${NC}"
+	echo "   Or set PROJECT_AUDIT_DIR in .env"
+	exit 1
 fi
 
 if [ ! -d "$PROJECT_DIR" ]; then
-  echo -e "${RED}❌ Directory not found: $PROJECT_DIR${NC}"
-  exit 1
+	echo -e "${RED}❌ Directory not found: $PROJECT_DIR${NC}"
+	exit 1
 fi
 
 mkdir -p "$OUTPUT_DIR"
 
-PROJECT_NAME=$(basename "$PROJECT_DIR")
-TIMESTAMP=$(date '+%Y-%m-%d %H:%M')
+PROJECT_NAME="$(basename -- "$PROJECT_DIR")"
+TIMESTAMP="$(date '+%Y-%m-%d %H:%M')"
 
 echo -e "${GREEN}═══ TEP — Audit & Optimize ═══${NC}"
 echo -e "📂 Project: ${GREEN}$PROJECT_NAME${NC} ($PROJECT_DIR)"
@@ -50,86 +60,96 @@ cat > "$RESULT_FILE" << EOF
 EOF
 
 # ============================================================
-# 1. INVENTORY
+# 1. INVENTORY (Claude Code configs)
 # ============================================================
-echo -e "\n${GREEN}[1/9] Claude Code file inventory${NC}"
+echo -e "\n${GREEN}[1/9] Claude Code configuration inventory${NC}"
 
 CLAUDE_MD="$PROJECT_DIR/CLAUDE.md"
 CLAUDE_DIR="$PROJECT_DIR/.claude"
 
 HAS_CLAUDE_MD=false; [ -f "$CLAUDE_MD" ] && HAS_CLAUDE_MD=true
 HAS_CLAUDE_DIR=false; [ -d "$CLAUDE_DIR" ] && HAS_CLAUDE_DIR=true
-HAS_SKILLS=false; [ -d "$CLAUDE_DIR/skills" ] && HAS_SKILLS=true
-HAS_MEMORY=false; [ -f "$CLAUDE_DIR/MEMORY.md" ] && HAS_MEMORY=true
+
+# Core well-known files
 HAS_SETTINGS=false; [ -f "$CLAUDE_DIR/settings.json" ] && HAS_SETTINGS=true
+HAS_SETTINGS_LOCAL=false; [ -f "$CLAUDE_DIR/settings.local.json" ] && HAS_SETTINGS_LOCAL=true
+HAS_MEMORY=false; [ -f "$CLAUDE_DIR/MEMORY.md" ] && HAS_MEMORY=true
 HAS_AGENTS=false; { [ -f "$CLAUDE_DIR/AGENTS.md" ] || [ -f "$PROJECT_DIR/AGENTS.md" ]; } && HAS_AGENTS=true
+
+# Skills + rules
+HAS_SKILLS=false; [ -d "$CLAUDE_DIR/skills" ] && HAS_SKILLS=true
+HAS_RULES=false; [ -d "$CLAUDE_DIR/rules" ] && HAS_RULES=true
+
+# New: catch-all inventory for any .md under .claude/ (future-proof)
+CLAUDE_MD_MISC_COUNT=0
+if $HAS_CLAUDE_DIR; then
+	# Include: .claude/*.md, .claude/**.md (including subfolders)
+	CLAUDE_MD_MISC_COUNT=$(find "$CLAUDE_DIR" -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+fi
 
 SKILL_COUNT=0
 $HAS_SKILLS && SKILL_COUNT=$(find "$CLAUDE_DIR/skills" -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
 
+RULE_COUNT=0
+$HAS_RULES && RULE_COUNT=$(find "$CLAUDE_DIR/rules" -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+
 DOCS_COUNT=0
 [ -d "$PROJECT_DIR/docs" ] && DOCS_COUNT=$(find "$PROJECT_DIR/docs" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
 
-# Terminal — helper function to avoid quoting issues
-status_icon() {
-  if $1; then echo "✅"; else echo "$2"; fi
-}
-status_icon_text() {
-  if $1; then echo "✅ $2"; else echo "$3"; fi
-}
+status_icon() { if "$1"; then echo "✅"; else echo "$2"; fi; }
+status_icon_text() { if "$1"; then echo "✅ $2"; else echo "$3"; fi; }
 
-echo "   CLAUDE.md        : $(status_icon "$HAS_CLAUDE_MD" '❌')"
-echo "   .claude/          : $(status_icon "$HAS_CLAUDE_DIR" '❌')"
-echo "   .claude/skills/   : $(status_icon_text "$HAS_SKILLS" "$SKILL_COUNT file(s)" '➖')"
-echo "   .claude/MEMORY.md : $(status_icon "$HAS_MEMORY" '➖')"
-echo "   settings.json     : $(status_icon "$HAS_SETTINGS" '➖')"
-echo "   AGENTS.md         : $(status_icon "$HAS_AGENTS" '➖')"
-echo "   docs/*.md         : $DOCS_COUNT file(s)"
-
-# Result.md
-INV_CLAUDE_MD=$(status_icon_text "$HAS_CLAUDE_MD" 'found' '❌ **MISSING**')
-INV_CLAUDE_DIR=$(status_icon "$HAS_CLAUDE_DIR" '❌')
-INV_SKILLS=$(status_icon_text "$HAS_SKILLS" "$SKILL_COUNT file(s)" '➖ missing')
-INV_MEMORY=$(status_icon "$HAS_MEMORY" '➖ missing')
-INV_SETTINGS=$(status_icon "$HAS_SETTINGS" '➖ missing')
-INV_AGENTS=$(status_icon "$HAS_AGENTS" '➖ missing')
+echo "   CLAUDE.md                : $(status_icon "$HAS_CLAUDE_MD" '❌')"
+echo "   .claude/                 : $(status_icon "$HAS_CLAUDE_DIR" '❌')"
+echo "   .claude/settings.json    : $(status_icon "$HAS_SETTINGS" '➖')"
+echo "   .claude/settings.local   : $(status_icon "$HAS_SETTINGS_LOCAL" '➖')"
+echo "   .claude/MEMORY.md        : $(status_icon "$HAS_MEMORY" '➖')"
+echo "   AGENTS.md                : $(status_icon "$HAS_AGENTS" '➖')"
+echo "   .claude/skills/*.md      : $(status_icon_text "$HAS_SKILLS" "$SKILL_COUNT file(s)" '➖')"
+echo "   .claude/rules/*.md       : $(status_icon_text "$HAS_RULES" "$RULE_COUNT file(s)" '➖')"
+echo "   .claude/**/*.md (total)  : $CLAUDE_MD_MISC_COUNT file(s)"
+echo "   docs/*.md                : $DOCS_COUNT file(s)"
 
 cat >> "$RESULT_FILE" << EOF
 ## 1. Inventory
 
 | File | Status |
 |------|--------|
-| CLAUDE.md | $INV_CLAUDE_MD |
-| .claude/ | $INV_CLAUDE_DIR |
-| .claude/skills/ | $INV_SKILLS |
-| .claude/MEMORY.md | $INV_MEMORY |
-| .claude/settings.json | $INV_SETTINGS |
-| AGENTS.md | $INV_AGENTS |
+| CLAUDE.md | $(status_icon_text "$HAS_CLAUDE_MD" 'found' '❌ **MISSING**') |
+| .claude/ | $(status_icon "$HAS_CLAUDE_DIR" '❌') |
+| .claude/settings.json | $(status_icon "$HAS_SETTINGS" '➖ missing') |
+| .claude/settings.local.json | $(status_icon "$HAS_SETTINGS_LOCAL" '➖ missing') |
+| .claude/MEMORY.md | $(status_icon "$HAS_MEMORY" '➖ missing') |
+| AGENTS.md | $(status_icon "$HAS_AGENTS" '➖ missing') |
+| .claude/skills/ | $(status_icon_text "$HAS_SKILLS" "$SKILL_COUNT file(s)" '➖ missing') |
+| .claude/rules/ | $(status_icon_text "$HAS_RULES" "$RULE_COUNT file(s)" '➖ missing') |
+| .claude/**/*.md (total) | $CLAUDE_MD_MISC_COUNT file(s) |
 | docs/*.md | $DOCS_COUNT file(s) |
 
 EOF
 
-if ! $HAS_CLAUDE_MD; then
-  echo -e "${RED}❌ No CLAUDE.md — cannot audit.${NC}"
-  echo "" >> "$RESULT_FILE"
-  echo "## ❌ STOP — No CLAUDE.md" >> "$RESULT_FILE"
-  echo "Create a CLAUDE.md before running the audit." >> "$RESULT_FILE"
-  exit 0
+if ! "$HAS_CLAUDE_MD"; then
+	echo -e "${RED}❌ No CLAUDE.md — cannot audit.${NC}"
+	echo "" >> "$RESULT_FILE"
+	echo "## ❌ STOP — No CLAUDE.md" >> "$RESULT_FILE"
+	echo "Create a CLAUDE.md before running the audit." >> "$RESULT_FILE"
+	exit 0
 fi
 
 # ============================================================
 # 2. AUDIT CLAUDE.MD
 # ============================================================
-echo -e "\n${GREEN}[2/9] CLAUDE.md audit${NC}"
+echo -e "\n${GREEN}[2/9] Audit CLAUDE.md${NC}"
 
+LINES=$(wc -l < "$CLAUDE_MD" | tr -d ' ')
 WORDS=$(wc -w < "$CLAUDE_MD" | tr -d ' ')
 TOKENS_APPROX=$((WORDS * 13 / 10))
 SECTION_COUNT=$(grep -c '^#' "$CLAUDE_MD" 2>/dev/null || echo 0)
 
 # Volatile detection
 VOLATILE_LINES=""
-if grep -qiE '(TODO|FIXME|WIP|HACK|en cours|current task|in progress)' "$CLAUDE_MD" 2>/dev/null; then
-  VOLATILE_LINES=$(grep -niE '(TODO|FIXME|WIP|HACK|en cours|current task|in progress)' "$CLAUDE_MD" 2>/dev/null | head -10)
+if grep -qiE '(TODO|FIXME|WIP|HACK|en cours|current task|aujourd)' "$CLAUDE_MD" 2>/dev/null; then
+  VOLATILE_LINES=$(grep -niE '(TODO|FIXME|WIP|HACK|en cours|current task|aujourd)' "$CLAUDE_MD" 2>/dev/null | head -10)
 fi
 
 DATE_LINES=""
@@ -142,7 +162,7 @@ VOLATILE_COUNT=0
 [ -n "$DATE_LINES" ] && VOLATILE_COUNT=$((VOLATILE_COUNT + 1))
 
 # Cache order
-FIRST_VOLATILE_LINE=$(grep -niE '(TODO|FIXME|WIP|en cours|current|contexte courant|current context|volatile)' "$CLAUDE_MD" 2>/dev/null | head -1 | cut -d: -f1 || true)
+FIRST_VOLATILE_LINE=$(grep -niE '(TODO|FIXME|WIP|en cours|current|contexte courant|volatile)' "$CLAUDE_MD" 2>/dev/null | head -1 | cut -d: -f1 || true)
 LAST_HEADING_LINE=$(grep -n '^## ' "$CLAUDE_MD" 2>/dev/null | tail -1 | cut -d: -f1 || true)
 
 ORDER_OK=true
@@ -163,50 +183,50 @@ HP_RESULTS=$(grep -rnE '(/Users/[a-zA-Z]|/home/[a-zA-Z]|[A-Z]:\\Users|[A-Z]:/Use
 if [ -n "$HP_RESULTS" ]; then
   HARDCODED_COUNT=$(echo "$HP_RESULTS" | wc -l | tr -d ' ')
   HARDCODED_PATHS="$HP_RESULTS"
-  echo -e "   ${RED}❌ $HARDCODED_COUNT hardcoded personal path(s)${NC}"
+  echo -e "   ${RED}❌ $HARDCODED_COUNT chemin(s) perso hardcodé(s)${NC}"
 else
-  echo "   ✅ No hardcoded paths"
+  echo "   ✅ Pas de chemins hardcodés"
 fi
 if $HAS_SKILLS; then
   HP_SKILLS=$(find "$CLAUDE_DIR/skills" -type f -name '*.md' -exec grep -lE '(/Users/[a-zA-Z]|/home/[a-zA-Z]|[A-Z]:\\Users|[A-Z]:/Users)' {} \; 2>/dev/null || true)
   if [ -n "$HP_SKILLS" ]; then
     HP_S_COUNT=$(echo "$HP_SKILLS" | wc -l | tr -d ' ')
     HARDCODED_COUNT=$((HARDCODED_COUNT + HP_S_COUNT))
-    echo -e "   ${RED}❌ $HP_S_COUNT skill(s) with personal paths${NC}"
+    echo -e "   ${RED}❌ $HP_S_COUNT skill(s) avec chemins perso${NC}"
   fi
 fi
 
 # Size verdict
 SIZE_VERDICT="✅ Compact (<5k tokens)"
-[ "$TOKENS_APPROX" -gt 5000 ] && SIZE_VERDICT="⚠️ Large (>5k tokens) — room for optimization"
-[ "$TOKENS_APPROX" -gt 8000 ] && SIZE_VERDICT="🚨 VERY LARGE (>8k tokens) — cache inefficient"
+[ "$TOKENS_APPROX" -gt 5000 ] && SIZE_VERDICT="⚠️ Gros (>5k tokens) — marge d'optimisation"
+[ "$TOKENS_APPROX" -gt 8000 ] && SIZE_VERDICT="🚨 TRÈS GROS (>8k tokens) — cache inefficace"
 
 # Terminal
-echo "   📏 $WORDS words ≈ ~$TOKENS_APPROX tokens — $SIZE_VERDICT"
-echo "   📑 $SECTION_COUNT sections | $REF_COUNT external refs"
-[ "$VOLATILE_COUNT" -gt 0 ] && echo -e "   ${YELLOW}⚠️  $VOLATILE_COUNT type(s) of volatile content detected${NC}"
-$ORDER_OK && echo "   ✅ Cache-friendly order OK" || echo -e "   ${RED}❌ Volatile BEFORE stable — bad for caching${NC}"
+echo "   📏 $WORDS mots ≈ ~$TOKENS_APPROX tokens — $SIZE_VERDICT"
+echo "   📑 $SECTION_COUNT sections | $REF_COUNT refs externes"
+[ "$VOLATILE_COUNT" -gt 0 ] && echo -e "   ${YELLOW}⚠️  $VOLATILE_COUNT type(s) de contenu volatile détecté(s)${NC}"
+$ORDER_OK && echo "   ✅ Ordre cache-friendly OK" || echo -e "   ${RED}❌ Volatile AVANT stable — mauvais pour le cache${NC}"
 
 # Result.md
 cat >> "$RESULT_FILE" << EOF
-## 2. CLAUDE.md audit
+## 2. Audit CLAUDE.md
 
-| Metric | Value |
-|--------|-------|
-| Words | $WORDS |
+| Métrique | Valeur |
+|----------|--------|
+| Mots | $WORDS |
 | Tokens (approx) | ~$TOKENS_APPROX |
 | Sections | $SECTION_COUNT |
-| External refs | $REF_COUNT |
-| Size | $SIZE_VERDICT |
-| Volatile content | $VOLATILE_COUNT type(s) detected |
-| Cache-friendly order | $(if $ORDER_OK; then echo '✅ OK'; else echo '❌ Volatile before stable'; fi) |
-| Hardcoded paths | $(if [ "$HARDCODED_COUNT" -eq 0 ]; then echo '✅ none'; else echo "❌ $HARDCODED_COUNT found"; fi) |
+| Refs externes | $REF_COUNT |
+| Taille | $SIZE_VERDICT |
+| Contenu volatile | $VOLATILE_COUNT type(s) détecté(s) |
+| Ordre cache-friendly | $(if $ORDER_OK; then echo '✅ OK'; else echo '❌ Volatile avant stable'; fi) |
+| Chemins hardcodés | $(if [ $HARDCODED_COUNT -eq 0 ]; then echo '✅ aucun'; else echo "❌ $HARDCODED_COUNT trouvé(s)"; fi) |
 
 EOF
 
 if [ -n "$VOLATILE_LINES" ]; then
   cat >> "$RESULT_FILE" << EOF
-### Volatile content detected
+### Contenu volatile détecté
 \`\`\`
 $VOLATILE_LINES
 \`\`\`
@@ -216,7 +236,7 @@ fi
 
 if [ -n "$DATE_LINES" ]; then
   cat >> "$RESULT_FILE" << EOF
-### Hardcoded dates
+### Dates hardcodées
 \`\`\`
 $DATE_LINES
 \`\`\`
@@ -226,7 +246,7 @@ fi
 
 if [ -n "$SECTIONS_LIST" ]; then
   cat >> "$RESULT_FILE" << EOF
-### Section structure
+### Structure des sections
 \`\`\`
 $SECTIONS_LIST
 \`\`\`
@@ -236,7 +256,7 @@ fi
 
 if [ -n "$HARDCODED_PATHS" ]; then
   cat >> "$RESULT_FILE" << EOF
-### Hardcoded paths detected
+### Chemins hardcodés détectés
 \`\`\`
 $HARDCODED_PATHS
 \`\`\`
@@ -245,9 +265,9 @@ EOF
 fi
 
 # ============================================================
-# 3. DUPLICATES
+# 3. DOUBLONS
 # ============================================================
-echo -e "\n${GREEN}[4/9] Duplicate detection${NC}"
+echo -e "\n${GREEN}[4/9] Détection de doublons${NC}"
 
 DUPLICATE_RISK=0
 DUPLICATE_DETAILS=""
@@ -262,45 +282,45 @@ if $HAS_SKILLS; then
       if [ -n "$SKILL_KEYWORDS" ]; then
         MATCHES=$(grep -ciE "$SKILL_KEYWORDS" "$CLAUDE_MD" 2>/dev/null || echo 0)
         if [ "$MATCHES" -gt 3 ]; then
-          echo -e "   ${YELLOW}⚠️  $SKILL_NAME ($SKILL_WORDS words) — $MATCHES cross-references${NC}"
+          echo -e "   ${YELLOW}⚠️  $SKILL_NAME ($SKILL_WORDS mots) — $MATCHES refs croisées${NC}"
           DUPLICATE_RISK=$((DUPLICATE_RISK + 1))
-          DUPLICATE_DETAILS="$DUPLICATE_DETAILS\n- **$SKILL_NAME** ($SKILL_WORDS words): $MATCHES cross-references in CLAUDE.md → likely duplicate"
+          DUPLICATE_DETAILS="$DUPLICATE_DETAILS\n- **$SKILL_NAME** ($SKILL_WORDS mots) : $MATCHES références croisées dans CLAUDE.md → doublon probable"
         else
-          echo "   ✅ $SKILL_NAME — no duplicate"
+          echo "   ✅ $SKILL_NAME — pas de doublon"
         fi
       fi
     done <<< "$SKILL_FILES"
   else
-    echo "   ℹ️  .claude/skills/ is empty"
+    echo "   ℹ️  .claude/skills/ vide"
   fi
 else
-  echo "   ℹ️  No skills to compare"
+  echo "   ℹ️  Pas de skills à comparer"
 fi
 
 if $HAS_AGENTS; then
   AGENTS_FILE="$CLAUDE_DIR/AGENTS.md"
   [ ! -f "$AGENTS_FILE" ] && AGENTS_FILE="$PROJECT_DIR/AGENTS.md"
   AGENTS_WORDS=$(wc -w < "$AGENTS_FILE" | tr -d ' ')
-  echo "   ℹ️  AGENTS.md detected ($AGENTS_WORDS words)"
+  echo "   ℹ️  AGENTS.md détecté ($AGENTS_WORDS mots)"
 fi
 
 cat >> "$RESULT_FILE" << EOF
-## 4. Duplicates (CLAUDE.md vs skills/agents)
+## 4. Doublons (CLAUDE.md vs skills/agents)
 
-- Duplicate risks: **$DUPLICATE_RISK**
+- Risques de doublons : **$DUPLICATE_RISK**
 EOF
 
 if [ -n "$DUPLICATE_DETAILS" ]; then
   echo -e "$DUPLICATE_DETAILS" >> "$RESULT_FILE"
 fi
 
-$HAS_AGENTS && echo "- AGENTS.md present ($AGENTS_WORDS words) — be careful not to duplicate" >> "$RESULT_FILE"
+$HAS_AGENTS && echo "- AGENTS.md présent ($AGENTS_WORDS mots) — attention à ne pas dupliquer" >> "$RESULT_FILE"
 echo "" >> "$RESULT_FILE"
 
 # ============================================================
 # 3. TOKEN BUDGET
 # ============================================================
-echo -e "\n${GREEN}[3/9] Token budget — config files${NC}"
+echo -e "\n${GREEN}[3/9] Budget tokens — fichiers de config${NC}"
 
 TOTAL_CONFIG_TOKENS=0
 TOKEN_TABLE=""
@@ -308,14 +328,13 @@ TOKEN_TABLE=""
 add_to_inventory() {
   local file="$1" label="$2"
   if [ -f "$file" ]; then
-    local lines chars words tokens
-    lines=$(wc -l < "$file" | tr -d ' ')
-    chars=$(wc -c < "$file" | tr -d ' ')
-    words=$(wc -w < "$file" | tr -d ' ')
-    tokens=$((words * 13 / 10))
+    local lines=$(wc -l < "$file" | tr -d ' ')
+    local chars=$(wc -c < "$file" | tr -d ' ')
+    local words=$(wc -w < "$file" | tr -d ' ')
+    local tokens=$((words * 13 / 10))
     TOTAL_CONFIG_TOKENS=$((TOTAL_CONFIG_TOKENS + tokens))
     TOKEN_TABLE="${TOKEN_TABLE}| ${label} | ${lines} | ${chars} | ~${tokens} |\n"
-    echo "   ${label}: ${lines} lines, ~${tokens} tokens"
+    echo "   ${label} : ${lines} lignes, ~${tokens} tokens"
   fi
 }
 
@@ -332,7 +351,7 @@ if $HAS_SKILLS; then
   SK_LIST=$(find "$CLAUDE_DIR/skills" -type f -name '*.md' 2>/dev/null || true)
   if [ -n "$SK_LIST" ]; then
     while IFS= read -r sf; do
-      add_to_inventory "$sf" "${sf#"$PROJECT_DIR"/}"
+      add_to_inventory "$sf" "${sf#$PROJECT_DIR/}"
     done <<< "$SK_LIST"
   fi
 fi
@@ -341,19 +360,19 @@ if [ -d "$CLAUDE_DIR/rules" ]; then
   RL_LIST=$(find "$CLAUDE_DIR/rules" -type f -name '*.md' 2>/dev/null || true)
   if [ -n "$RL_LIST" ]; then
     while IFS= read -r rf; do
-      add_to_inventory "$rf" "${rf#"$PROJECT_DIR"/}"
+      add_to_inventory "$rf" "${rf#$PROJECT_DIR/}"
     done <<< "$RL_LIST"
   fi
 fi
 
 echo "   ────────────────────────"
-echo -e "   ${GREEN}TOTAL: ~$TOTAL_CONFIG_TOKENS config tokens${NC}"
+echo -e "   ${GREEN}TOTAL : ~$TOTAL_CONFIG_TOKENS tokens de config${NC}"
 
 cat >> "$RESULT_FILE" << EOF
-## 3. Token budget (config)
+## 3. Budget tokens (config)
 
-| File | Lines | Chars | Est. Tokens |
-|------|------:|------:|------------:|
+| Fichier | Lignes | Chars | Est. Tokens |
+|---------|-------:|------:|------------:|
 $(echo -e "$TOKEN_TABLE" | sed '/^$/d')
 | **TOTAL** | | | **~$TOTAL_CONFIG_TOKENS** |
 
@@ -362,7 +381,7 @@ EOF
 # ============================================================
 # 4. GITIGNORE + CLAUDEIGNORE
 # ============================================================
-echo -e "\n${GREEN}[5/9] Check .gitignore & .claudeignore${NC}"
+echo -e "\n${GREEN}[5/9] Vérification .gitignore & .claudeignore${NC}"
 
 GITIGNORE="$PROJECT_DIR/.gitignore"
 GITIGNORE_ISSUES=0
@@ -371,25 +390,25 @@ GITIGNORE_DETAILS=""
 if [ -f "$GITIGNORE" ]; then
   if $HAS_MEMORY; then
     if grep -q '.claude/MEMORY.md' "$GITIGNORE" 2>/dev/null; then
-      echo "   ✅ .claude/MEMORY.md in .gitignore"
+      echo "   ✅ .claude/MEMORY.md dans .gitignore"
     else
-      echo -e "   ${RED}❌ .claude/MEMORY.md NOT in .gitignore${NC}"
+      echo -e "   ${RED}❌ .claude/MEMORY.md PAS dans .gitignore${NC}"
       GITIGNORE_ISSUES=$((GITIGNORE_ISSUES + 1))
-      GITIGNORE_DETAILS="$GITIGNORE_DETAILS\n- ❌ Add \`.claude/MEMORY.md\` to .gitignore (changes every session)"
+      GITIGNORE_DETAILS="$GITIGNORE_DETAILS\n- ❌ Ajouter \`.claude/MEMORY.md\` au .gitignore (change à chaque session)"
     fi
   fi
 
   if $HAS_SKILLS; then
     if grep -q '.claude/skills' "$GITIGNORE" 2>/dev/null; then
-      echo -e "   ${RED}❌ .claude/skills/ in .gitignore (should be committed!)${NC}"
+      echo -e "   ${RED}❌ .claude/skills/ dans .gitignore (devrait être commité !)${NC}"
       GITIGNORE_ISSUES=$((GITIGNORE_ISSUES + 1))
-      GITIGNORE_DETAILS="$GITIGNORE_DETAILS\n- ❌ Remove \`.claude/skills/\` from .gitignore (skills should be committed)"
+      GITIGNORE_DETAILS="$GITIGNORE_DETAILS\n- ❌ Retirer \`.claude/skills/\` du .gitignore (les skills doivent être commités)"
     else
-      echo "   ✅ .claude/skills/ will be committed"
+      echo "   ✅ .claude/skills/ sera commité"
     fi
   fi
 else
-  echo -e "   ${YELLOW}⚠️  No .gitignore${NC}"
+  echo -e "   ${YELLOW}⚠️  Pas de .gitignore${NC}"
 fi
 
 # .claudeignore check
@@ -397,12 +416,12 @@ CLAUDEIGNORE="$PROJECT_DIR/.claudeignore"
 CLAUDEIGNORE_ISSUES=0
 
 if [ -f "$CLAUDEIGNORE" ]; then
-  echo "   ✅ .claudeignore exists"
+  echo "   ✅ .claudeignore existe"
   if ! grep -qE '\.git(/|$)' "$CLAUDEIGNORE" 2>/dev/null; then
-    echo -e "   ${RED}❌ .git/ NOT in .claudeignore${NC}"
+    echo -e "   ${RED}❌ .git/ PAS dans .claudeignore${NC}"
     CLAUDEIGNORE_ISSUES=$((CLAUDEIGNORE_ISSUES + 1))
   else
-    echo "   ✅ .git/ in .claudeignore"
+    echo "   ✅ .git/ dans .claudeignore"
   fi
   MISSING_PATS=""
   for pat in node_modules dist build .next __pycache__ target; do
@@ -411,89 +430,112 @@ if [ -f "$CLAUDEIGNORE" ]; then
     fi
   done
   if [ -n "$MISSING_PATS" ]; then
-    echo -e "   ${YELLOW}⚠️  Existing directories not ignored:$MISSING_PATS${NC}"
+    echo -e "   ${YELLOW}⚠️  Dossiers existants non ignorés :$MISSING_PATS${NC}"
   fi
 else
-  echo -e "   ${YELLOW}⚠️  No .claudeignore — Claude Code may read unnecessary files${NC}"
+  echo -e "   ${YELLOW}⚠️  Pas de .claudeignore — Claude Code peut lire des fichiers inutiles${NC}"
   CLAUDEIGNORE_ISSUES=$((CLAUDEIGNORE_ISSUES + 1))
 fi
 
 cat >> "$RESULT_FILE" << EOF
-## 5. Check .gitignore & .claudeignore
+## 5. Vérification .gitignore & .claudeignore
 
-- .gitignore issues: **$GITIGNORE_ISSUES**
-- .claudeignore issues: **$CLAUDEIGNORE_ISSUES**
+- Problèmes .gitignore : **$GITIGNORE_ISSUES**
+- Problèmes .claudeignore : **$CLAUDEIGNORE_ISSUES**
 EOF
 
 [ -n "$GITIGNORE_DETAILS" ] && echo -e "$GITIGNORE_DETAILS" >> "$RESULT_FILE"
 echo "" >> "$RESULT_FILE"
 
 # ============================================================
-# 5. HOOKS & SETTINGS (Cache audit check 1)
+# 5. HOOKS (settings.json + filesystem) & SETTINGS
 # ============================================================
-echo -e "\n${GREEN}[6/9] Hooks & settings.json analysis${NC}"
+echo -e "\n${GREEN}[6/9] Hooks & settings analysis${NC}"
 
 HOOKS_ISSUES=0
 HOOKS_DETAILS=""
 MCP_COUNT=0
 HOOK_COUNT=0
 
+# A) Filesystem hooks: .claude/hooks/*.sh (your case)
+HAS_FS_HOOKS=false
+FS_HOOK_DIR="$CLAUDE_DIR/hooks"
+FS_HOOK_FILES=""
+FS_HOOK_COUNT=0
+if [ -d "$FS_HOOK_DIR" ]; then
+	# Use -print0 to survive weird filenames
+	FS_HOOK_COUNT=$(find "$FS_HOOK_DIR" -maxdepth 1 -type f -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')
+	if [ "$FS_HOOK_COUNT" -gt 0 ]; then
+		HAS_FS_HOOKS=true
+		FS_HOOK_FILES=$(find "$FS_HOOK_DIR" -maxdepth 1 -type f -name '*.sh' 2>/dev/null | sort)
+		echo "   ✅ Filesystem hooks: $FS_HOOK_COUNT script(s) in .claude/hooks/"
+		echo "$FS_HOOK_FILES" | sed 's/^/      - /'
+	else
+		echo "   ℹ️  .claude/hooks/ exists but contains no *.sh"
+	fi
+else
+	echo "   ℹ️  No .claude/hooks/ directory"
+fi
+
+# B) settings.json hooks (Claude Code config)
 if $HAS_SETTINGS && command -v jq &>/dev/null; then
-  SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+	SETTINGS_FILE="$CLAUDE_DIR/settings.json"
 
-  # JSON validation
-  if jq . "$SETTINGS_FILE" > /dev/null 2>&1; then
-    echo "   ✅ settings.json: valid JSON"
-  else
-    echo -e "   ${RED}❌ settings.json: INVALID JSON!${NC}"
-    HOOKS_ISSUES=$((HOOKS_ISSUES + 1))
-    HOOKS_DETAILS="$HOOKS_DETAILS\n- ❌ **settings.json** — invalid JSON, fix syntax"
-  fi
+	# JSON validation
+	if jq . "$SETTINGS_FILE" > /dev/null 2>&1; then
+		echo "   ✅ settings.json: valid JSON"
+	else
+		echo -e "   ${RED}❌ settings.json: INVALID JSON!${NC}"
+		HOOKS_ISSUES=$((HOOKS_ISSUES + 1))
+		HOOKS_DETAILS="$HOOKS_DETAILS\n- ❌ **settings.json** — invalid JSON, fix syntax"
+	fi
 
-  # MCP tools count
-  MCP_COUNT=$(jq -r '.mcpServers // {} | keys | length' "$SETTINGS_FILE" 2>/dev/null || echo 0)
-  echo "   🔌 MCP servers: $MCP_COUNT"
+	# MCP tools count
+	MCP_COUNT=$(jq -r '.mcpServers // {} | keys | length' "$SETTINGS_FILE" 2>/dev/null || echo 0)
+	echo "   🔌 MCP servers: $MCP_COUNT"
 
-  # Hooks detection
-  HOOK_TYPES=$(jq -r '.hooks // {} | keys[]' "$SETTINGS_FILE" 2>/dev/null || true)
-  if [ -n "$HOOK_TYPES" ]; then
-    while IFS= read -r hook_type; do
-      CMDS=$(jq -r ".hooks[\"$hook_type\"][]?.command // empty" "$SETTINGS_FILE" 2>/dev/null || true)
-      if [ -n "$CMDS" ]; then
-        HOOK_COUNT=$((HOOK_COUNT + $(echo "$CMDS" | wc -l | tr -d ' ')))
-        echo "   📎 $hook_type:"
-        echo "$CMDS" | while IFS= read -r cmd; do
-          echo "      → $cmd"
-        done
-        # Check if any hook modifies CLAUDE.md or system prompt
-        if echo "$CMDS" | grep -qiE '(CLAUDE\.md|system.prompt|>> *.*CLAUDE|> *.*CLAUDE)'; then
-          HOOKS_ISSUES=$((HOOKS_ISSUES + 1))
-          HOOKS_DETAILS="$HOOKS_DETAILS\n- ❌ Hook **$hook_type** appears to modify CLAUDE.md/system prompt → breaks the cache!"
-          echo -e "      ${RED}⚠️  DANGER: hook modifies CLAUDE.md/system prompt!${NC}"
-        fi
-      fi
-    done <<< "$HOOK_TYPES"
-    [ "$HOOK_COUNT" -eq 0 ] && echo "   ℹ️  Hooks declared but no commands"
-  else
-    echo "   ℹ️  No hooks configured"
-  fi
+	# Hooks declared in settings.json
+	HOOK_TYPES=$(jq -r '.hooks // {} | keys[]' "$SETTINGS_FILE" 2>/dev/null || true)
+	if [ -n "$HOOK_TYPES" ]; then
+		while IFS= read -r hook_type; do
+			CMDS=$(jq -r ".hooks[\"$hook_type\"][]?.command // empty" "$SETTINGS_FILE" 2>/dev/null || true)
+			if [ -n "$CMDS" ]; then
+				HOOK_COUNT=$((HOOK_COUNT + $(echo "$CMDS" | wc -l | tr -d ' ')))
+				echo "   📎 settings.json hook: $hook_type"
+				echo "$CMDS" | while IFS= read -r cmd; do
+					echo "      → $cmd"
+				done
 
-  # Check for dynamic content in settings that could break cache
-  if jq -e '.customInstructions // empty' "$SETTINGS_FILE" &>/dev/null 2>&1; then
-    CUSTOM_LEN=$(jq -r '.customInstructions | length' "$SETTINGS_FILE" 2>/dev/null || echo 0)
-    if [ "$CUSTOM_LEN" -gt 500 ]; then
-      echo -e "   ${YELLOW}⚠️  Long customInstructions ($CUSTOM_LEN chars) — check for volatile content${NC}"
-    fi
-  fi
+				# Cache safety: never modify CLAUDE.md/system prompt mid-session
+				if echo "$CMDS" | grep -qiE '(CLAUDE\.md|system.prompt|>> *.*CLAUDE|> *.*CLAUDE)'; then
+					HOOKS_ISSUES=$((HOOKS_ISSUES + 1))
+					HOOKS_DETAILS="$HOOKS_DETAILS\n- ❌ Hook **$hook_type** appears to modify CLAUDE.md/system prompt → breaks cache"
+					echo -e "      ${RED}⚠️  DANGER: hook modifies CLAUDE.md/system prompt!${NC}"
+				fi
+			fi
+		done <<< "$HOOK_TYPES"
+		[ "$HOOK_COUNT" -eq 0 ] && echo "   ℹ️  Hooks declared but no commands"
+	else
+		echo "   ℹ️  No hooks configured in settings.json"
+	fi
+
+	# Check for dynamic content in settings that could break cache
+	if jq -e '.customInstructions // empty' "$SETTINGS_FILE" &>/dev/null 2>&1; then
+		CUSTOM_LEN=$(jq -r '.customInstructions | length' "$SETTINGS_FILE" 2>/dev/null || echo 0)
+		if [ "$CUSTOM_LEN" -gt 500 ]; then
+			echo -e "   ${YELLOW}⚠️  Long customInstructions ($CUSTOM_LEN chars) — check for volatile content${NC}"
+		fi
+	fi
 
 elif $HAS_SETTINGS; then
-  echo -e "   ${YELLOW}⚠️  jq not installed — limited settings.json analysis${NC}"
-  # Fallback grep
-  if grep -q '"hooks"' "$CLAUDE_DIR/settings.json" 2>/dev/null; then
-    echo "   📎 Hooks detected (install jq for detailed analysis)"
-  fi
+	echo -e "   ${YELLOW}⚠️  jq not installed — limited settings.json hook analysis${NC}"
+	if grep -q '"hooks"' "$CLAUDE_DIR/settings.json" 2>/dev/null; then
+		echo "   📎 hooks key detected (install jq for details)"
+	else
+		echo "   ℹ️  No hooks key found in settings.json"
+	fi
 else
-  echo "   ℹ️  No settings.json"
+	echo "   ℹ️  No settings.json"
 fi
 
 cat >> "$RESULT_FILE" << EOF
@@ -501,11 +543,22 @@ cat >> "$RESULT_FILE" << EOF
 
 | Item | Value |
 |------|-------|
+| Filesystem hooks (.claude/hooks/*.sh) | $FS_HOOK_COUNT |
+| settings.json hooks (commands) | $HOOK_COUNT |
 | MCP servers | $MCP_COUNT |
-| Hooks | $HOOK_COUNT command(s) |
 | Hook issues | $HOOKS_ISSUES |
 
 EOF
+
+if $HAS_FS_HOOKS; then
+	cat >> "$RESULT_FILE" << EOF
+### Filesystem hooks detected (.claude/hooks/*.sh)
+\`\`\`
+$FS_HOOK_FILES
+\`\`\`
+
+EOF
+fi
 
 if [ -n "$HOOKS_DETAILS" ]; then
   echo -e "$HOOKS_DETAILS" >> "$RESULT_FILE"
@@ -513,22 +566,22 @@ if [ -n "$HOOKS_DETAILS" ]; then
 fi
 
 if [ "$MCP_COUNT" -gt 5 ]; then
-  echo "⚠️ $MCP_COUNT MCP servers — each tool change alters the cached prefix. Disable unused ones." >> "$RESULT_FILE"
+  echo "⚠️ $MCP_COUNT MCP servers — chaque tool change le préfixe caché. Désactiver ceux non utilisés." >> "$RESULT_FILE"
   echo "" >> "$RESULT_FILE"
 fi
 
 # ============================================================
-# 6. SESSION STATS (if available)
+# 6. SESSION STATS (si disponible)
 # ============================================================
-echo -e "\n${GREEN}[7/9] Latest Claude Code session stats${NC}"
+echo -e "\n${GREEN}[7/9] Stats de la dernière session Claude Code${NC}"
 
-# Auto-detect session directory
+# Auto-détection du dossier de session
 SESSION_DIR=$(find "$HOME/.claude/projects" -maxdepth 1 -type d -name "*${PROJECT_NAME}*" 2>/dev/null | head -1)
 LATEST=""
 HAS_SESSION=false
 
 if [ -n "$SESSION_DIR" ]; then
-  LATEST=$(find "$SESSION_DIR" -maxdepth 1 -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+  LATEST=$(ls -t "$SESSION_DIR"/*.jsonl 2>/dev/null | head -1)
   [ -n "$LATEST" ] && HAS_SESSION=true
 fi
 
@@ -556,13 +609,13 @@ if $HAS_SESSION && command -v jq &>/dev/null; then
     CACHE_HIT_RATE=0
   fi
 
-  # Cost (Sonnet pricing) — awk instead of bc (more portable)
+  # Cost (Sonnet pricing) — awk au lieu de bc (plus portable, dispo partout)
   COST_USD=$(awk "BEGIN { printf \"%.4f\", $INPUT_TOKENS * 3 / 1000000 + $OUTPUT_TOKENS * 15 / 1000000 + $CACHE_READ * 0.3 / 1000000 + $CACHE_CREATION * 3.75 / 1000000 }" 2>/dev/null || echo "N/A")
 
   echo "   Input: $INPUT_TOKENS | Output: $OUTPUT_TOKENS"
   echo "   Cache read: $CACHE_READ | Cache write: $CACHE_CREATION"
   echo "   Cache hit rate: ${CACHE_HIT_RATE}%"
-  echo "   Estimated cost: \$$COST_USD"
+  echo "   Coût estimé: \$$COST_USD"
 
   # Top files
   TOP_FILES=$(jq -r 'select(.type=="assistant") |
@@ -579,31 +632,31 @@ if $HAS_SESSION && command -v jq &>/dev/null; then
     sort | uniq -c | sort -rn || true)
 
   echo ""
-  [ -n "$TOP_FILES" ] && echo "   Top files read:" && echo "$TOP_FILES" | head -10 | sed 's/^/      /'
-  [ -n "$TOP_ACTIONS" ] && echo "   Top actions:" && echo "$TOP_ACTIONS" | head -10 | sed 's/^/      /'
+  [ -n "$TOP_FILES" ] && echo "   Top fichiers lus :" && echo "$TOP_FILES" | head -10 | sed 's/^/      /'
+  [ -n "$TOP_ACTIONS" ] && echo "   Top actions :" && echo "$TOP_ACTIONS" | head -10 | sed 's/^/      /'
 
   # Result.md
   cat >> "$RESULT_FILE" << EOF
-## 7. Latest session stats
+## 7. Stats dernière session
 
-| Metric | Value |
-|--------|-------|
+| Métrique | Valeur |
+|----------|--------|
 | Session | \`$(basename "$LATEST")\` |
 | Input tokens | $INPUT_TOKENS |
 | Output tokens | $OUTPUT_TOKENS |
 | Cache read | $CACHE_READ |
 | Cache creation | $CACHE_CREATION |
 | **Cache hit rate** | **${CACHE_HIT_RATE}%** |
-| Estimated cost | \$$COST_USD |
+| Coût estimé | \$$COST_USD |
 
-### Top 15 files read
+### Top 15 fichiers lus
 \`\`\`
-${TOP_FILES:-No data}
+${TOP_FILES:-Aucune donnée}
 \`\`\`
 
 ### Top actions (tool calls)
 \`\`\`
-${TOP_ACTIONS:-No data}
+${TOP_ACTIONS:-Aucune donnée}
 \`\`\`
 
 EOF
@@ -611,119 +664,119 @@ EOF
 else
   REASON=""
   if [ -z "$SESSION_DIR" ]; then
-    REASON="No session directory found for '$PROJECT_NAME'"
+    REASON="Aucun dossier de session trouvé pour '$PROJECT_NAME'"
     echo -e "   ${YELLOW}⚠️  $REASON${NC}"
-    echo "   Available directories:"
-    find "$HOME/.claude/projects/" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; 2>/dev/null | sed 's/^/      /' || echo "      (none)"
+    echo "   Dossiers disponibles :"
+    ls "$HOME/.claude/projects/" 2>/dev/null | sed 's/^/      /' || echo "      (aucun)"
   elif [ -z "$LATEST" ]; then
-    REASON="No .jsonl in $SESSION_DIR"
+    REASON="Aucun .jsonl dans $SESSION_DIR"
     echo -e "   ${YELLOW}⚠️  $REASON${NC}"
   elif ! command -v jq &>/dev/null; then
-    REASON="jq not installed (winget install jqlang.jq)"
+    REASON="jq non installé (winget install jqlang.jq)"
     echo -e "   ${YELLOW}⚠️  $REASON${NC}"
   fi
 
   cat >> "$RESULT_FILE" << EOF
-## 7. Latest session stats
+## 7. Stats dernière session
 
-⚠️ Not available: $REASON
+⚠️ Non disponible : $REASON
 
-To get stats:
-1. Run a Claude Code session on the project
-2. Install \`jq\` if missing
-3. Re-run this script
+Pour obtenir les stats :
+1. Lancer une session Claude Code sur le projet
+2. Installer \`jq\` si manquant
+3. Relancer ce script
 
 EOF
 fi
 
 # ============================================================
-# 6. SCORE & RECOMMENDATIONS
+# 6. SCORE & RECOMMANDATIONS
 # ============================================================
-echo -e "\n${GREEN}[8/9] Score & Recommendations${NC}"
+echo -e "\n${GREEN}[8/9] Score & Recommandations${NC}"
 
 SCORE=0
 MAX_SCORE=8
 RECOS=""
 
-# Criterion 1: Size
+# Critère 1 : Taille
 if [ "$TOKENS_APPROX" -le 5000 ]; then
   SCORE=$((SCORE + 1))
 else
-  RECOS="$RECOS\n### 💡 Reduce CLAUDE.md (<5k tokens)\n- Move heavy sections to \`.claude/skills/\` or \`docs/\`\n- CLAUDE.md = rules + pointers. Details elsewhere.\n- ⚠️ Check that agents don't already have this info\n"
+  RECOS="$RECOS\n### 💡 Réduire CLAUDE.md (<5k tokens)\n- Déplacer sections lourdes vers \`.claude/skills/\` ou \`docs/\`\n- CLAUDE.md = règles + pointeurs. Le détail ailleurs.\n- ⚠️ Vérifier que les agents n'ont pas déjà cette info\n"
 fi
 
-# Criterion 2: Volatile
+# Critère 2 : Volatile
 if [ "$VOLATILE_COUNT" -eq 0 ]; then
   SCORE=$((SCORE + 1))
 else
-  RECOS="$RECOS\n### 💡 Move volatile content to the END of CLAUDE.md\n- TODO, WIP, dates, current tasks → \`## Current context\` section at the very bottom\n- Everything before it stays identical between sessions = permanent cache hit\n"
+  RECOS="$RECOS\n### 💡 Déplacer le contenu volatile en FIN de CLAUDE.md\n- TODO, WIP, dates, tâche en cours → section \`## Contexte courant\` tout en bas\n- Tout ce qui précède reste identique entre sessions = cache hit permanent\n"
 fi
 
-# Criterion 3: Order
+# Critère 3 : Ordre
 if $ORDER_OK; then
   SCORE=$((SCORE + 1))
 else
-  RECOS="$RECOS\n### 💡 Reorder for caching\n1. Identity / role / stack (never changes)\n2. Conventions / rules / commands (rarely changes)\n3. References to docs/skills (rarely changes)\n4. Current context / volatile (changes often) → **at the very bottom**\n"
+  RECOS="$RECOS\n### 💡 Réordonner pour le cache\n1. Identité / rôle / stack (ne change jamais)\n2. Conventions / règles / commandes (change rarement)\n3. Références à docs/skills (change rarement)\n4. Contexte courant / volatile (change souvent) → **tout en bas**\n"
 fi
 
-# Criterion 4: Duplicates
+# Critère 4 : Doublons
 if [ "$DUPLICATE_RISK" -eq 0 ]; then
   SCORE=$((SCORE + 1))
 else
-  RECOS="$RECOS\n### 💡 Eliminate duplicates\n- CLAUDE.md should NOT repeat what's in skills or AGENTS.md\n- Principle: CLAUDE.md = rules + pointers to skills\n"
+  RECOS="$RECOS\n### 💡 Éliminer les doublons\n- CLAUDE.md ne doit PAS répéter ce qui est dans skills ou AGENTS.md\n- Principe : CLAUDE.md = règles + pointeurs vers skills\n"
 fi
 
-# Criterion 5: .gitignore
+# Critère 5 : .gitignore
 if [ "$GITIGNORE_ISSUES" -eq 0 ]; then
   SCORE=$((SCORE + 1))
 else
-  RECOS="$RECOS\n### 💡 Fix .gitignore\n- .claude/MEMORY.md → MUST be in .gitignore (changes every session)\n- .claude/skills/ → MUST NOT be ignored (should be committed)\n"
+  RECOS="$RECOS\n### 💡 Corriger .gitignore\n- .claude/MEMORY.md → DOIT être dans .gitignore (change chaque session)\n- .claude/skills/ → NE DOIT PAS être ignoré (doit être commité)\n"
 fi
 
-# Criterion 6: Hooks don't modify system prompt
+# Critère 6 : Hooks ne modifient pas le system prompt
 if [ "$HOOKS_ISSUES" -eq 0 ]; then
   SCORE=$((SCORE + 1))
 else
-  RECOS="$RECOS\n### 💡 Fix hooks\n- Hooks must NEVER modify CLAUDE.md or the system prompt mid-session\n- Use \`additionalContext\` in the hook's JSON response (injected as \`<system-reminder>\` in messages)\n- Every system prompt modification = full cache invalidation\n"
+  RECOS="$RECOS\n### 💡 Corriger les hooks\n- Les hooks ne doivent JAMAIS modifier CLAUDE.md ou le system prompt mid-session\n- Utiliser \`additionalContext\` dans la réponse JSON du hook (injecté comme \`<system-reminder>\` en message)\n- Chaque modification du system prompt = invalidation complète du cache\n"
 fi
 
-# Criterion 7: .claudeignore
+# Critère 7 : .claudeignore
 if [ "$CLAUDEIGNORE_ISSUES" -eq 0 ]; then
   SCORE=$((SCORE + 1))
 else
-  RECOS="$RECOS\n### 💡 Create/complete .claudeignore\n- Create a \`.claudeignore\` file at the project root\n- Include \`.git/\`, \`node_modules/\`, \`dist/\`, \`build/\`, and large binaries\n- Every non-ignored file = potentially wasted tokens\n"
+  RECOS="$RECOS\n### 💡 Créer/compléter .claudeignore\n- Créer un fichier \`.claudeignore\` à la racine du projet\n- Inclure \`.git/\`, \`node_modules/\`, \`dist/\`, \`build/\`, et les gros binaires\n- Chaque fichier non ignoré = tokens potentiellement gaspillés\n"
 fi
 
-# Criterion 8: No hardcoded paths
+# Critère 8 : Pas de chemins hardcodés
 if [ "$HARDCODED_COUNT" -eq 0 ]; then
   SCORE=$((SCORE + 1))
 else
-  RECOS="$RECOS\n### 💡 Remove hardcoded paths\n- Replace absolute paths (\`/Users/...\`, \`C:\\Users\\...\`) with relative paths\n- These paths only work on your machine and pollute shared files\n"
+  RECOS="$RECOS\n### 💡 Supprimer les chemins hardcodés\n- Remplacer les chemins absolus (\`/Users/...\`, \`C:\\Users\\...\`) par des chemins relatifs\n- Ces chemins ne fonctionnent que sur ta machine et polluent les fichiers partagés\n"
 fi
 
 # Terminal
-echo -e "\n   🎯 Cache-friendliness score: ${GREEN}$SCORE/$MAX_SCORE${NC}"
+echo -e "\n   🎯 Score cache-friendliness : ${GREEN}$SCORE/$MAX_SCORE${NC}"
 echo "   📏 CLAUDE.md    : ~$TOKENS_APPROX tokens | $SECTION_COUNT sections"
-$HAS_SKILLS && echo "   📄 Skills       : $SKILL_COUNT file(s)"
-$HAS_AGENTS && echo "   🤖 Agents       : detected"
-echo "   ⚠️  Volatile     : $VOLATILE_COUNT issue(s)"
-echo "   🔄 Duplicates   : $DUPLICATE_RISK risk(s)"
-echo "   📁 .gitignore   : $GITIGNORE_ISSUES issue(s)"
-echo "   📎 Hooks        : $HOOKS_ISSUES issue(s) ($HOOK_COUNT hook(s), $MCP_COUNT MCP)"
-echo "   🚫 Claudeignore : $CLAUDEIGNORE_ISSUES issue(s)"
-echo "   🔗 Hardcoded    : $HARDCODED_COUNT personal path(s)"
+$HAS_SKILLS && echo "   📄 Skills       : $SKILL_COUNT fichier(s)"
+$HAS_AGENTS && echo "   🤖 Agents       : détecté"
+echo "   ⚠️  Volatile     : $VOLATILE_COUNT problème(s)"
+echo "   🔄 Doublons     : $DUPLICATE_RISK risque(s)"
+echo "   📁 .gitignore   : $GITIGNORE_ISSUES problème(s)"
+echo "   📎 Hooks        : $HOOKS_ISSUES problème(s) ($HOOK_COUNT hook(s), $MCP_COUNT MCP)"
+echo "   🚫 Claudeignore  : $CLAUDEIGNORE_ISSUES problème(s)"
+echo "   🔗 Hardcoded     : $HARDCODED_COUNT chemin(s) perso"
 $HAS_SESSION && echo "   📊 Cache hit    : ${CACHE_HIT_RATE}%"
 
 if [ "$SCORE" -eq "$MAX_SCORE" ]; then
-  echo -e "\n   ${GREEN}🎉 Project is well optimized for caching!${NC}"
+  echo -e "\n   ${GREEN}🎉 Projet bien optimisé pour le cache !${NC}"
 fi
 
 # Result.md — Score
 cat >> "$RESULT_FILE" << EOF
-## 8. Score & Recommendations
+## 8. Score & Recommandations
 
-| Criterion | Status |
-|-----------|--------|
+| Critère | Status |
+|---------|--------|
 EOF
 
 # Build score lines with helper to avoid quoting issues
@@ -732,17 +785,17 @@ score_line() {
   if $ok; then echo "| $label | ✅ $detail |"; else echo "| $label | ❌ $detail |"; fi
 }
 
-score_line "CLAUDE.md size (<5k tokens)" "$([ "$TOKENS_APPROX" -le 5000 ] && echo true || echo false)" "~$TOKENS_APPROX tokens" >> "$RESULT_FILE"
-score_line "Volatile content isolated" "$([ "$VOLATILE_COUNT" -eq 0 ] && echo true || echo false)" "$VOLATILE_COUNT issue(s)" >> "$RESULT_FILE"
-score_line "Cache-friendly order" "$ORDER_OK" "$(if $ORDER_OK; then echo 'OK'; else echo 'volatile before stable'; fi)" >> "$RESULT_FILE"
-score_line "No duplicates" "$([ "$DUPLICATE_RISK" -eq 0 ] && echo true || echo false)" "$DUPLICATE_RISK risk(s)" >> "$RESULT_FILE"
-score_line ".gitignore correct" "$([ "$GITIGNORE_ISSUES" -eq 0 ] && echo true || echo false)" "$GITIGNORE_ISSUES issue(s)" >> "$RESULT_FILE"
-score_line "Safe hooks (no system prompt modification)" "$([ "$HOOKS_ISSUES" -eq 0 ] && echo true || echo false)" "$HOOKS_ISSUES issue(s)" >> "$RESULT_FILE"
-score_line ".claudeignore configured" "$([ "$CLAUDEIGNORE_ISSUES" -eq 0 ] && echo true || echo false)" "$CLAUDEIGNORE_ISSUES issue(s)" >> "$RESULT_FILE"
-score_line "No hardcoded paths" "$([ "$HARDCODED_COUNT" -eq 0 ] && echo true || echo false)" "$HARDCODED_COUNT found" >> "$RESULT_FILE"
+score_line "Taille CLAUDE.md (<5k tokens)" "$([ $TOKENS_APPROX -le 5000 ] && echo true || echo false)" "~$TOKENS_APPROX tokens" >> "$RESULT_FILE"
+score_line "Contenu volatile isolé" "$([ $VOLATILE_COUNT -eq 0 ] && echo true || echo false)" "$VOLATILE_COUNT problème(s)" >> "$RESULT_FILE"
+score_line "Ordre cache-friendly" "$ORDER_OK" "$(if $ORDER_OK; then echo 'OK'; else echo 'volatile avant stable'; fi)" >> "$RESULT_FILE"
+score_line "Pas de doublons" "$([ $DUPLICATE_RISK -eq 0 ] && echo true || echo false)" "$DUPLICATE_RISK risque(s)" >> "$RESULT_FILE"
+score_line ".gitignore correct" "$([ $GITIGNORE_ISSUES -eq 0 ] && echo true || echo false)" "$GITIGNORE_ISSUES problème(s)" >> "$RESULT_FILE"
+score_line "Hooks safe (pas de modif system prompt)" "$([ $HOOKS_ISSUES -eq 0 ] && echo true || echo false)" "$HOOKS_ISSUES problème(s)" >> "$RESULT_FILE"
+score_line ".claudeignore configuré" "$([ $CLAUDEIGNORE_ISSUES -eq 0 ] && echo true || echo false)" "$CLAUDEIGNORE_ISSUES problème(s)" >> "$RESULT_FILE"
+score_line "Pas de chemins hardcodés" "$([ $HARDCODED_COUNT -eq 0 ] && echo true || echo false)" "$HARDCODED_COUNT trouvé(s)" >> "$RESULT_FILE"
 
 cat >> "$RESULT_FILE" << EOF
-| **Total score** | **$SCORE/$MAX_SCORE** |
+| **Score total** | **$SCORE/$MAX_SCORE** |
 
 EOF
 
@@ -750,7 +803,7 @@ if $HAS_SESSION; then
   if [ "$CACHE_HIT_RATE" -ge 80 ]; then
     echo "| Cache hit rate | ${CACHE_HIT_RATE}% ✅ |" >> "$RESULT_FILE"
   else
-    echo "| Cache hit rate | ${CACHE_HIT_RATE}% ⚠️ target >80% |" >> "$RESULT_FILE"
+    echo "| Cache hit rate | ${CACHE_HIT_RATE}% ⚠️ cible >80% |" >> "$RESULT_FILE"
   fi
   echo "" >> "$RESULT_FILE"
 fi
@@ -759,7 +812,7 @@ if [ -n "$RECOS" ]; then
   echo -e "$RECOS" >> "$RESULT_FILE"
 else
   echo "" >> "$RESULT_FILE"
-  echo "✅ **No action required** — project is optimized for caching." >> "$RESULT_FILE"
+  echo "✅ **Aucune action requise** — le projet est optimisé pour le cache." >> "$RESULT_FILE"
 fi
 
 # Footer
@@ -767,23 +820,23 @@ cat >> "$RESULT_FILE" << EOF
 
 ---
 
-## Actions for Claude Code
+## Actions pour Claude Code
 
-If you're reading this file, here's what to do:
+Si tu lis ce fichier, voici ce que tu dois faire :
 
-1. **Score < $MAX_SCORE/$MAX_SCORE?** Read the recommendations above and apply them
-2. **Cache hit rate < 80%?** CLAUDE.md changes too often — stabilize content at the top
-3. **Duplicates detected?** Remove CLAUDE.md sections that already exist in skills or AGENTS.md
-4. **Misplaced volatile content?** Move ALL volatile content (TODO, WIP, dates) to a \`## Current context\` section at the end of CLAUDE.md
-5. **CLAUDE.md > 5k tokens?** Extract heavy sections to \`.claude/skills/\` — CLAUDE.md keeps only rules and pointers
+1. **Score < $MAX_SCORE/$MAX_SCORE ?** Lis les recommandations ci-dessus et applique-les
+2. **Cache hit rate < 80% ?** Le CLAUDE.md change trop souvent — stabilise le contenu en haut du fichier
+3. **Doublons détectés ?** Supprime les sections du CLAUDE.md qui sont déjà dans les skills ou AGENTS.md
+4. **Volatile mal placé ?** Déplace TOUT le contenu volatile (TODO, WIP, dates) dans une section \`## Contexte courant\` en fin de CLAUDE.md
+5. **CLAUDE.md > 5k tokens ?** Extrais les sections lourdes vers \`.claude/skills/\` — le CLAUDE.md ne garde que les règles et les pointeurs
 
-> Reminder: every CLAUDE.md modification invalidates the cache from that point onward. Stable content at the top = permanent cache hit.
+> Rappel : chaque modification du CLAUDE.md invalide le cache à partir du point de modification. Le contenu stable en haut = cache hit permanent.
 EOF
 
 # ============================================================
-# 9. HISTORY
+# 9. HISTORIQUE
 # ============================================================
-echo -e "\n${GREEN}[9/9] History${NC}"
+echo -e "\n${GREEN}[9/9] Historique${NC}"
 
 mkdir -p "$SCRIPT_DIR/evals"
 HISTORY_FILE="$SCRIPT_DIR/evals/history.jsonl"
@@ -793,23 +846,24 @@ $HAS_SESSION && HIST_ENTRY="$HIST_ENTRY,\"cache_hit_rate\":$CACHE_HIT_RATE,\"cos
 HIST_ENTRY="$HIST_ENTRY}"
 
 echo "$HIST_ENTRY" >> "$HISTORY_FILE"
-echo "   📊 Appended to evals/history.jsonl"
+echo "   📊 Ajouté dans evals/history.jsonl"
 
 if [ -f "$HISTORY_FILE" ]; then
   HIST_COUNT=$(wc -l < "$HISTORY_FILE" | tr -d ' ')
-  echo "   📈 $HIST_COUNT entry(ies) in history"
+  echo "   📈 $HIST_COUNT entrée(s) dans l'historique"
   if [ "$HIST_COUNT" -gt 1 ]; then
     PREV_SCORE=$(tail -2 "$HISTORY_FILE" | head -1 | sed -n 's/.*"score":\([0-9]*\).*/\1/p' 2>/dev/null || true)
     if [ -n "$PREV_SCORE" ]; then
       if [ "$SCORE" -gt "$PREV_SCORE" ]; then
-        echo -e "   ${GREEN}↑ Score improved: $PREV_SCORE/$MAX_SCORE → $SCORE/$MAX_SCORE${NC}"
+        echo -e "   ${GREEN}↑ Score amélioré : $PREV_SCORE/$MAX_SCORE → $SCORE/$MAX_SCORE${NC}"
       elif [ "$SCORE" -lt "$PREV_SCORE" ]; then
-        echo -e "   ${RED}↓ Regression: $PREV_SCORE/$MAX_SCORE → $SCORE/$MAX_SCORE${NC}"
+        echo -e "   ${RED}↓ Régression : $PREV_SCORE/$MAX_SCORE → $SCORE/$MAX_SCORE${NC}"
       else
-        echo "   → Score stable: $SCORE/$MAX_SCORE"
+        echo "   → Score stable : $SCORE/$MAX_SCORE"
       fi
     fi
   fi
 fi
 
-echo -e "\n${GREEN}✅ Report written to: $RESULT_FILE${NC}"
+echo -e "\n${GREEN}✅ Rapport écrit dans : $RESULT_FILE${NC}"
+echo "   Claude Code peut le lire avec : cat docs/RESULT.md"
