@@ -15,7 +15,7 @@ TEP is a **pure observer**: it reads Claude Code session data (`~/.claude/projec
 ## Quick start
 
 ```bash
-git clone https://github.com/MadSaas/tep.git
+git clone https://github.com/marcantoinedutoit/tep.git
 cd tep
 pnpm install
 cp .env.example .env
