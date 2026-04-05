@@ -17,7 +17,7 @@ Thumbs.db
 *.log
 **/logs/
 .tmp/
-.cache/
+.cache
 .eslintcache
 .pnpm-debug.log*
 npm-debug.log*
@@ -31,4 +31,5 @@ pnpm-lock.yaml
 package-lock.json
 yarn.lock
 .pnpm-store/
+
 ../*

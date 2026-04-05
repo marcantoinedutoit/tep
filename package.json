@@ -1,20 +1,57 @@
 {
-  "name": "tep",
-  "author": "Marc-Antoine DUTOIT",
-  "version": "1.0.0",
-  "description": "Token Economy Paradigm — Audit & optimize prompt caching for Claude Code CLI",
+  "name": "tep-cli",
+  "version": "2.0.0",
+  "description": "TEP — Token Economy Paradigm: Audit & optimize your Claude Code configuration for maximum cache efficiency",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "token-economy",
+    "prompt-caching",
+    "audit",
+    "optimization",
+    "cli",
+    "bash"
+  ],
+  "homepage": "https://github.com/marcantoinedutoit/tep",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marcantoinedutoit/tep.git"
+  },
+  "bugs": {
+    "url": "https://github.com/marcantoinedutoit/tep/issues"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Marc-Antoine DUTOIT",
+    "url": "https://github.com/marcantoinedutoit"
+  },
+  "bin": {
+    "tep": "./bin/tep"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "scripts/",
+    "steps/",
+    "docs/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "tep:audit": "bash scripts/audit-and-optimize.sh",
-    "usage": "npx ccusage@latest",
+    "tep:audit": "./bin/tep audit",
+    "usage": "npx ccusage",
+    "test": "echo 'No tests yet — see CONTRIBUTING.md'",
+    "lint": "shellcheck lib/*.sh steps/*.sh scripts/*.sh bin/tep",
     "prepare": "husky"
+  },
+  "engines": {
+    "node": ">=16"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.4.2",
+    "@commitlint/types": "^20.5.0",
     "@commitlint/config-conventional": "^20.4.2",
     "ccusage": "latest",
     "husky": "^9.1.7"
-  },
-  "dependencies": {
-    "@commitlint/types": "^20.5.0"
   }
 }
