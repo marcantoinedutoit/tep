@@ -1,3 +1,6 @@
+
+# TEP - Token Economy Paradigm
+
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![ShellCheck](https://github.com/marcantoinedutoit/tep/actions/workflows/lint.yml/badge.svg)
 ![Bash 4+](https://img.shields.io/badge/Bash-4%2B-green.svg)
