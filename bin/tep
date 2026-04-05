@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# bin/tep — CLI entrypoint for TEP (Token Economy Paradigm)
+# Usage:
+#   tep audit <project-path> [--out <dir>] [--no-color]
+#   tep --help
+#   tep --version
+#
+# Install: chmod +x bin/tep && ln -s $(pwd)/bin/tep /usr/local/bin/tep
+# Or: npx tep audit <path>
+
+# shellcheck disable=SC1090,SC2164  # Dynamic source + cd in subshell
+
+TEP_VERSION="2.0.0"
+
+# ─── Resolve script location (handles symlinks) ─────────────
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
+TEP_ROOT="$(cd "${BIN_DIR}/.." && pwd)"
+
+# ─── Help ────────────────────────────────────────────────────
+show_help() {
+	cat <<-EOF
+	TEP — Token Economy Paradigm v${TEP_VERSION}
+	Audit & optimize your Claude Code configuration.
+
+	Usage:
+	  tep audit <project-path>  Run full audit on a project
+	  tep --help                Show this help message
+	  tep --version             Show version
+
+	Options:
+	  --out <dir>       Output directory for RESULT.md (default: tep/out/)
+	  --no-color        Disable colored output
+	  --verbose         Show extra debug info
+
+	Examples:
+	  tep audit .
+	  tep audit ~/projects/myapp
+	  tep audit /path/to/project --out ./reports
+	  tep audit . --no-color
+
+	Documentation: https://github.com/marc-music/tep
+	EOF
+}
+
+# ─── Version ─────────────────────────────────────────────────
+show_version() {
+	echo "tep v${TEP_VERSION}"
+}
+
+# ─── Argument parsing ────────────────────────────────────────
+COMMAND=""
+TEP_PROJECT_DIR=""
+TEP_OUT_DIR=""
+export TEP_NO_COLOR="${TEP_NO_COLOR:-}"
+export TEP_VERBOSE="${TEP_VERBOSE:-}"
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		audit)
+			COMMAND="audit"
+			shift
+			;;
+		--help|-h)
+			show_help
+			exit 0
+			;;
+		--version|-v)
+			show_version
+			exit 0
+			;;
+		--out)
+			shift
+			TEP_OUT_DIR="${1:-}"
+			if [[ -z "$TEP_OUT_DIR" ]]; then
+				echo "Error: --out requires a directory argument" >&2
+				exit 1
+			fi
+			shift
+			;;
+		--no-color)
+			TEP_NO_COLOR=1
+			shift
+			;;
+		--verbose)
+			TEP_VERBOSE=1
+			shift
+			;;
+		-*)
+			echo "Unknown option: $1" >&2
+			echo "Run 'tep --help' for usage." >&2
+			exit 1
+			;;
+		*)
+			# Positional argument (project path after 'audit')
+			if [[ "$COMMAND" == "audit" ]] && [[ -z "$TEP_PROJECT_DIR" ]]; then
+				TEP_PROJECT_DIR="$1"
+			else
+				echo "Unexpected argument: $1" >&2
+				echo "Run 'tep --help' for usage." >&2
+				exit 1
+			fi
+			shift
+			;;
+	esac
+done
+
+# ─── Validate ────────────────────────────────────────────────
+if [[ -z "$COMMAND" ]]; then
+	show_help
+	exit 0
+fi
+
+if [[ "$COMMAND" == "audit" ]]; then
+	# Project path validation
+	# NOTE: project path is optional here.
+	# If absent, step_ctx() (steps/00-ctx.sh) will fallback to PROJECT_AUDIT_DIR from .env.
+	if [[ -n "$TEP_PROJECT_DIR" ]]; then
+		if [[ ! -d "$TEP_PROJECT_DIR" ]]; then
+			echo "Error: '$TEP_PROJECT_DIR' is not a directory." >&2
+			exit 1
+		fi
+		# Export for orchestrator (only if provided)
+		export TEP_PROJECT_DIR
+	fi
+
+	# Export for orchestrator
+	export TEP_OUT_DIR
+	export TEP_NO_COLOR
+	export TEP_VERBOSE
+
+	# Launch orchestrator
+	exec bash "${TEP_ROOT}/scripts/tep.sh"
+else
+	echo "Unknown command: $COMMAND" >&2
+	echo "Run 'tep --help' for usage." >&2
+	exit 1
+fi
