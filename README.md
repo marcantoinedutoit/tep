@@ -10,6 +10,8 @@
 
 Audit & optimize prompt caching for Claude Code. Score /8, zero tokens consumed for the analysis.
 
+<img width="720" height="377" alt="image" src="https://github.com/user-attachments/assets/d431d18f-bad3-470a-926f-ea5800fda4db" />
+
 ## Why TEP?
 Anthropic's prompt caching offers a 90% cost reduction on cache-read tokens. But without knowing what to cache and where you're burning tokens, that power is wasted.
 
@@ -20,6 +22,7 @@ TEP produces:
 - A detailed `out/RESULT.md` report with metrics, issues, and actionable recommendations
 - Session cost analysis from your last Claude Code session (tokens, cache hit rate, estimated cost)
 - Historical tracking via `evals/history.jsonl` for longitudinal optimization
+
 
 ## Quick start
 
